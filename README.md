@@ -24,16 +24,16 @@ Lightweight TUI using curses, no heavy GUI required
 
 Installation
 
-1. Clone the repository
+1. Clone the repository:
 git clone https://github.com/archuser231/Auri.git
 
-2. Enter the directory
+2. Enter the directory:
 cd Auri
 
-3. Build and install the package
+3. Build and install the package:
 makepkg -si
 
-4. Launch Auri
+4. Launch Auri:
 auri
 
 After installation, a systemd timer is automatically enabled to run batch actions weekly.
