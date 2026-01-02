@@ -1,252 +1,350 @@
 #!/usr/bin/env python3
-import curses, subprocess, os, sys, shutil, datetime, tempfile, json
+import curses
+import subprocess
+import os
+import sys
+import json
+import shutil
+import datetime
+import tempfile
 
 PACMAN_LOCK = "/var/lib/pacman/db.lck"
 LOG_FILE = "/var/log/auri.log"
 BATCH_CONFIG = "/etc/auri/batch.json"
+SCHEDULER_CONFIG = "/etc/auri/scheduler.json"
+LINES_PER_PAGE = 20
 
 # -----------------------------
-# Helpers
+# CORE HELPERS
 # -----------------------------
-def log_action(action):
+def log(msg):
     with open(LOG_FILE, "a") as f:
-        f.write(f"{datetime.datetime.now()} :: {action}\n")
+        f.write(f"{datetime.datetime.now()} :: {msg}\n")
 
-def safe_addstr(stdscr, text):
+def safe_addstr(stdscr, txt):
     try:
-        stdscr.addstr(str(text))
+        stdscr.addstr(txt)
     except curses.error:
         pass
 
 def run(cmd, stdscr=None):
-    log_action("RUN: " + " ".join(cmd))
-    if shutil.which(cmd[0]) is None:
-        log_action(f"Command not found: {cmd[0]}")
-        if stdscr: safe_addstr(stdscr,f"❌ Command not found: {cmd[0]}\n")
-        return 1
-    if stdscr:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        count = 0
-        for line in p.stdout:
-            safe_addstr(stdscr,line)
-            stdscr.refresh()
-            count += 1
-            if count % 20 == 0:  # pause toutes les 20 lignes
-                safe_addstr(stdscr,"\n--More-- (press any key)")
-                stdscr.getch()
-        p.wait()
-        returncode = p.returncode
-        if returncode != 0:
-            safe_addstr(stdscr,"\n❌ Command failed with code {}\n".format(returncode))
-        return returncode
-    else:
-        p = subprocess.Popen(cmd)
+    log(f"RUN: {cmd}")
+    p = subprocess.Popen(
+        cmd, shell=True, executable="/bin/bash",
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    if not stdscr:
         p.wait()
         return p.returncode
 
+    count = 0
+    for line in p.stdout:
+        safe_addstr(stdscr, line)
+        count += 1
+        if count % LINES_PER_PAGE == 0:
+            safe_addstr(stdscr, "\n--More--")
+            stdscr.getch()
+            safe_addstr(stdscr, "\n")
+        stdscr.refresh()
+    p.wait()
+    if p.returncode != 0:
+        safe_addstr(stdscr, f"\n❌ Command failed ({p.returncode})\n")
+    return p.returncode
+
 def header(stdscr, title):
-    if stdscr: stdscr.clear(); safe_addstr(stdscr,f"== {title} ==\n\n")
+    stdscr.clear()
+    safe_addstr(stdscr, f"Auri :: {title}\n")
+    safe_addstr(stdscr, "="*40 + "\n\n")
 
-def confirm(stdscr,msg):
-    if stdscr:
-        safe_addstr(stdscr,f"{msg}\nType YES to continue: ")
-        curses.echo()
-        s = stdscr.getstr(0,30).decode()
-        curses.noecho()
-        return s.strip() == "YES"
-    return False
-
-def safe_write(path, content):
-    if os.path.exists(path): shutil.copy2(path,path+".bak")
-    with tempfile.NamedTemporaryFile("w",delete=False) as tf:
-        tf.write(content)
-        tmpname = tf.name
-    shutil.move(tmpname,path)
+def confirm(stdscr, msg):
+    safe_addstr(stdscr, f"{msg}\nType YES to continue: ")
+    curses.echo()
+    ans = stdscr.getstr(0,30).decode().strip()
+    curses.noecho()
+    return ans == "YES"
 
 def ensure_batch_config():
     if not os.path.exists(BATCH_CONFIG):
         os.makedirs(os.path.dirname(BATCH_CONFIG), exist_ok=True)
-        example = {
-            "actions": ["remove_lock","mirror_optimizer","update_system"],
-            "frequency": "weekly"
-        }
         with open(BATCH_CONFIG,"w") as f:
-            json.dump(example,f,indent=4)
-        print(f"Created example batch config at {BATCH_CONFIG}")
+            json.dump({"actions":["remove_lock","dns_reset","mirror_optimizer","update_system"]}, f, indent=4)
+
+def ensure_scheduler_config():
+    if not os.path.exists(SCHEDULER_CONFIG):
+        os.makedirs(os.path.dirname(SCHEDULER_CONFIG), exist_ok=True)
+        with open(SCHEDULER_CONFIG,"w") as f:
+            json.dump({"actions":[],"enabled":False,"interval":"weekly"}, f, indent=4)
 
 # -----------------------------
-# Actions
+# ACTIONS
 # -----------------------------
-def remove_lock(stdscr=None):
-    if os.path.exists(PACMAN_LOCK): os.remove(PACMAN_LOCK); log_action("pacman lock removed")
-    else: log_action("no pacman lock found")
-    if stdscr: safe_addstr(stdscr,"✔ pacman lock handled\nPress any key..."); stdscr.getch()
+def remove_lock(stdscr):
+    header(stdscr,"Remove pacman lock")
+    run("rm -f /var/lib/pacman/db.lck", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def mirror_optimizer(stdscr=None):
-    if shutil.which("reflector") is None: return
-    run(["reflector","--latest","20","--protocol","https","--sort","rate","--save","/etc/pacman.d/mirrorlist"],stdscr)
-    if stdscr: safe_addstr(stdscr,"✔ Mirrors optimized\nPress any key..."); stdscr.getch()
+def mirror_optimizer(stdscr):
+    header(stdscr,"Mirror Optimizer")
+    run("reflector --latest 20 --protocol https --sort rate --save /etc/pacman.d/mirrorlist", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def snapshot(stdscr,label="snapshot"):
-    run(["snapper","create","-d",f"auri {label}"],stdscr)
-    if stdscr: safe_addstr(stdscr,"Press any key..."); stdscr.getch()
+def update_system(stdscr):
+    header(stdscr,"Update System")
+    run("pacman -Syu --noconfirm --needed --overwrite '*'", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def update_system(stdscr=None):
-    run(["pacman","-Syu","--noconfirm","--needed","--overwrite","*"],stdscr)
-    if stdscr: safe_addstr(stdscr,"✔ Update finished\nPress any key..."); stdscr.getch()
+def full_fix(stdscr):
+    header(stdscr,"Full System Fix")
+    run("pacman -Syu --noconfirm --needed --overwrite '*'", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def full_fix(stdscr=None):
-    run(["pacman","-Syu","--overwrite","*","--needed","--noconfirm"],stdscr)
+def reinstall_all(stdscr):
+    header(stdscr,"Reinstall ALL packages")
+    if not confirm(stdscr,"⚠️ This will reinstall everything"):
+        return
+    run("pacman -Qnq | pacman -S --noconfirm --needed -", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def reinstall_all(stdscr=None):
-    if stdscr and not confirm(stdscr,"⚠️ Reinstall ALL packages?"): return
-    run(["bash","-c","pacman -Qnq | pacman -S --noconfirm --needed -"],stdscr)
+def remove_orphans(stdscr):
+    header(stdscr,"Remove Orphans")
+    run("pacman -Qdtq | pacman -Rns --noconfirm -", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def remove_orphans(stdscr=None):
-    run(["bash","-c","pacman -Qdtq | pacman -Rns --noconfirm -"],stdscr)
+def clean_cache(stdscr):
+    header(stdscr,"Clean Cache")
+    run("pacman -Sc --noconfirm", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def clean_cache(stdscr=None):
-    run(["pacman","-Sc","--noconfirm"],stdscr)
+def sound_fix(stdscr):
+    header(stdscr,"Sound Fix")
+    run("pacman -S --noconfirm pipewire pipewire-alsa pipewire-pulse wireplumber", stdscr)
+    run("systemctl --user enable --now pipewire pipewire-pulse wireplumber", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def sound_fix(stdscr=None):
-    pkgs = ["pipewire","pipewire-alsa","pipewire-pulse","wireplumber"]
-    run(["pacman","-S","--noconfirm"]+pkgs,stdscr)
-    for svc in pkgs[::3]: run(["systemctl","--user","enable","--now",svc],stdscr)
+def reset_snapper(stdscr):
+    header(stdscr,"Reset Snapper")
+    if not confirm(stdscr,"⚠️ Reset Snapper config?"):
+        return
+    run("snapper -c root delete-config", stdscr)
+    run("snapper -c root create-config /", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def reset_snapper(stdscr=None):
-    if stdscr and not confirm(stdscr,"⚠️ Reset Snapper config?"): return
-    run(["snapper","-c","root","delete-config"],stdscr)
-    run(["snapper","-c","root","create-config","/"],stdscr)
+def dns_reset(stdscr):
+    header(stdscr,"DNS Reset")
+    run("""
+rm -f /etc/resolv.conf
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+systemctl restart systemd-resolved
+systemctl restart NetworkManager
+resolvectl flush-caches || true
+resolvectl status || true
+""", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
-def wine_install(stdscr,mode):
-    if mode in ("x86","both"): run(["pacman","-S","--noconfirm","lib32-wine"],stdscr)
-    if mode in ("x64","both"): run(["pacman","-S","--noconfirm","wine","wine-mono","wine-gecko"],stdscr)
-
-def kernel_manager(stdscr=None):
+def kernel_manager(stdscr):
     curses.endwin()
-    print("Launching official CachyOS kernel manager...")
-    if shutil.which("cachyos-kernel-manager"): subprocess.call(["cachyos-kernel-manager"])
-    elif shutil.which("cachyos-settings"): subprocess.call(["cachyos-settings"])
-    else: print("❌ No official kernel manager found")
+    os.system("cachyos-kernel-manager || cachyos-settings || echo 'No kernel manager'")
     input("Press Enter...")
-    curses.initscr(); curses.curs_set(0)
+    curses.initscr()
 
-def install_virtualization_stack(stdscr=None):
-    user = os.getlogin(); pkgs = ["qemu","virt-manager","virt-viewer","dnsmasq","vde2","bridge-utils","openbsd-netcat","ebtables","iptables","libguestfs","fuse2","gtkmm","linux-headers","pcsclite","libcanberra"]
-    run(["pacman","-S","--noconfirm"]+pkgs,stdscr)
-    run(["systemctl","restart","libvirtd"],stdscr)
-    run(["usermod","-aG","libvirt",user],stdscr)
-    run(["systemctl","enable","--now","libvirtd"],stdscr)
-
-# -----------------------------
-# Repo & Keyring
-# -----------------------------
-OFFICIAL_REPOS = {"core","extra","community","multilib","cachyos"}
-KNOWN_KEYRINGS = {"arch":"archlinux-keyring","cachyos":"cachyos-keyring","chaotic":"chaotic-keyring","blackarch":"blackarch-keyring","archstrike":"archstrike-keyring"}
-def parse_active_repos():
-    repos=[]
-    with open("/etc/pacman.conf","r") as f:
-        for line in f:
-            line=line.strip()
-            if line.startswith("[") and line.endswith("]"): repos.append(line[1:-1].lower())
-    return repos
-
-def manage_repos_and_keyrings(stdscr=None):
-    active=parse_active_repos()
-    tier_repos=[r for r in active if r not in OFFICIAL_REPOS]
-    to_update=[]
-    for r in tier_repos:
-        kr=KNOWN_KEYRINGS.get(r)
-        if kr:
-            if stdscr: safe_addstr(stdscr,f"Repo found: {r}, keyring: {kr}\nDo you want to update? (y/n): ")
-            ans="y" if stdscr is None else stdscr.getstr(0,3).decode().strip().lower()
-            if ans=="y": to_update.append(kr)
-    if to_update:
-        run(["pacman","-Sy","--noconfirm"]+to_update,stdscr)
-        run(["pacman-key","--init"],stdscr)
-        for kr in to_update: run(["pacman-key","--populate",kr.split("-keyring")[0]],stdscr)
-        run(["pacman-key","--refresh-keys"],stdscr)
+def virtualization(stdscr):
+    header(stdscr,"Virtualization Stack")
+    run("""
+pacman -S --noconfirm qemu virt-manager virt-viewer dnsmasq vde2 bridge-utils \
+openbsd-netcat ebtables iptables libguestfs fuse2 gtkmm linux-headers pcsclite \
+libcanberra
+systemctl enable --now libvirtd
+usermod -aG libvirt $(logname)
+""", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
 
 # -----------------------------
-# ACTIONS DICT
+# ACTIONS LIST
 # -----------------------------
-ACTIONS_DICT={
-    "remove_lock":remove_lock,
-    "update_system":update_system,
-    "mirror_optimizer":mirror_optimizer,
-    "snapshot_pre":lambda s:snapshot(s,"pre-update"),
-    "snapshot_post":lambda s:snapshot(s,"post-update"),
-    "full_fix":full_fix,
-    "reinstall_all":reinstall_all,
-    "remove_orphans":remove_orphans,
-    "clean_cache":clean_cache,
-    "sound_fix":sound_fix,
-    "reset_snapper":reset_snapper,
-    "wine_x86":lambda s:wine_install(s,"x86"),
-    "wine_x64":lambda s:wine_install(s,"x64"),
-    "wine_both":lambda s:wine_install(s,"both"),
-    "kernel_manager":kernel_manager,
-    "virtualization":install_virtualization_stack,
-    "repos_keyrings":manage_repos_and_keyrings
-}
+ACTIONS = [
+    ("Remove pacman lock", remove_lock),
+    ("DNS Reset", dns_reset),
+    ("Optimize Mirrors", mirror_optimizer),
+    ("Update System", update_system),
+    ("Full System Fix", full_fix),
+    ("Reinstall ALL Packages", reinstall_all),
+    ("Remove Orphan Packages", remove_orphans),
+    ("Clean Pacman Cache", clean_cache),
+    ("Sound Fix", sound_fix),
+    ("Reset Snapper", reset_snapper),
+    ("Kernel Manager", kernel_manager),
+    ("Install Virtualization Stack", virtualization)
+]
 
 # -----------------------------
 # BATCH MODE
 # -----------------------------
-def batch_mode(stdscr=None):
-    header(stdscr,"Batch Mode")
-    if os.path.exists(BATCH_CONFIG):
-        with open(BATCH_CONFIG) as f: cfg=json.load(f)
-        for act in cfg.get("actions",[]): ACTIONS_DICT[act](stdscr)
-    else:
-        if stdscr: safe_addstr(stdscr,"No batch config found.\nPress any key..."); stdscr.getch()
+def batch_menu(stdscr):
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    ensure_batch_config()
+    with open(BATCH_CONFIG) as f:
+        cfg = json.load(f)
+    selected = {fn.__name__: (fn.__name__ in cfg.get("actions", [])) for label, fn in ACTIONS}
+
+    options = [(label, fn.__name__) for label, fn in ACTIONS]
+    cur = 0
+    while True:
+        stdscr.clear()
+        safe_addstr(stdscr,"Batch Mode Selection\n====================\nArrow keys: move | SPACE: toggle | ENTER: save\n\n")
+        for i, (label, act_name) in enumerate(options):
+            mark = "[X]" if selected[act_name] else "[ ]"
+            if i==cur: stdscr.addstr(f"> {mark} {label}\n", curses.A_REVERSE)
+            else: safe_addstr(stdscr,f"  {mark} {label}\n")
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")) and cur>0: cur-=1
+        elif key in (curses.KEY_DOWN, ord("j")) and cur<len(options)-1: cur+=1
+        elif key==ord(" "):
+            act_name = options[cur][1]
+            selected[act_name] = not selected[act_name]
+        elif key in (10,13):
+            actions_to_run = [act for act,sel in selected.items() if sel]
+            os.makedirs(os.path.dirname(BATCH_CONFIG), exist_ok=True)
+            with open(BATCH_CONFIG,"w") as f:
+                json.dump({"actions": actions_to_run},f,indent=4)
+            safe_addstr(stdscr,"\n✅ Batch config saved!\n")
+            stdscr.getch()
+            break
 
 # -----------------------------
-# MAIN MENU
+# SCHEDULER MENU
 # -----------------------------
-def menu(stdscr):
-    curses.curs_set(0); stdscr.keypad(True)
-    options=[("Remove pacman lock",remove_lock),
-             ("Manage Repos / Keyrings",manage_repos_and_keyrings),
-             ("Optimize mirrors",mirror_optimizer),
-             ("Pre-update snapshot",lambda s:snapshot(s,"pre-update")),
-             ("Update system",update_system),
-             ("Post-update snapshot",lambda s:snapshot(s,"post-update")),
-             ("Full system fix",full_fix),
-             ("Reinstall ALL",reinstall_all),
-             ("Remove orphan packages",remove_orphans),
-             ("Clean pacman cache",clean_cache),
-             ("Sound fix",sound_fix),
-             ("Reset Snapper",reset_snapper),
-             ("Wine x86",lambda s:wine_install(s,"x86")),
-             ("Wine x64",lambda s:wine_install(s,"x64")),
-             ("Wine both",lambda s:wine_install(s,"both")),
-             ("Kernel manager",kernel_manager),
-             ("Install Virtualization stack",install_virtualization_stack),
-             ("Batch Mode / Scheduler",batch_mode),
-             ("Exit",None)]
-    cur=0
+INTERVALS = ["on-boot","hourly","daily","weekly","monthly"]
+def scheduler_menu(stdscr):
+    curses.curs_set(0)
+    stdscr.keypad(True)
+    ensure_scheduler_config()
+    with open(SCHEDULER_CONFIG) as f:
+        cfg = json.load(f)
+    selected = {fn.__name__: (fn.__name__ in cfg.get("actions", [])) for label, fn in ACTIONS}
+    cur = 0
+    interval_idx = INTERVALS.index(cfg.get("interval","weekly")) if cfg.get("interval") in INTERVALS else 3
+    enabled = cfg.get("enabled",False)
+    options = [(label, fn.__name__) for label, fn in ACTIONS]
+
     while True:
-        stdscr.clear(); safe_addstr(stdscr,"Auri :: Advanced System Tool\n===============================\n\n")
-        for i,(label,_) in enumerate(options):
-            if i==cur:
-                stdscr.addstr("> "+label+"\n", curses.A_REVERSE)
+        stdscr.clear()
+        safe_addstr(stdscr,"Scheduler Configuration\n======================\nArrow: move | SPACE: toggle | i: interval | e: enable | ENTER: save\n\n")
+        safe_addstr(stdscr,f"Enabled: {'ON' if enabled else 'OFF'}\nInterval: {INTERVALS[interval_idx]}\n\n")
+        for i,(label, act_name) in enumerate(options):
+            mark = "[X]" if selected[act_name] else "[ ]"
+            if i==cur: stdscr.addstr(f"> {mark} {label}\n", curses.A_REVERSE)
+            else: safe_addstr(stdscr,f"  {mark} {label}\n")
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")) and cur>0: cur-=1
+        elif key in (curses.KEY_DOWN, ord("j")) and cur<len(options)-1: cur+=1
+        elif key==ord(" "):
+            act_name = options[cur][1]
+            selected[act_name] = not selected[act_name]
+        elif key==ord("i"):
+            interval_idx = (interval_idx+1)%len(INTERVALS)
+        elif key==ord("e"):
+            enabled = not enabled
+        elif key in (10,13):
+            # save config
+            actions_to_run = [act for act,sel in selected.items() if sel]
+            os.makedirs(os.path.dirname(SCHEDULER_CONFIG), exist_ok=True)
+            with open(SCHEDULER_CONFIG,"w") as f:
+                json.dump({"actions":actions_to_run,"enabled":enabled,"interval":INTERVALS[interval_idx]},f,indent=4)
+            # create systemd timer
+            timer_path = "/etc/systemd/system/auri.timer"
+            service_path = "/etc/systemd/system/auri.service"
+            # create service
+            with open(service_path,"w") as f:
+                f.write(f"""[Unit]
+Description=Auri Scheduled Service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/auri --batch
+""")
+            # create timer
+            oncalendar = {"on-boot":"OnBootSec=1min",
+                          "hourly":"OnCalendar=hourly",
+                          "daily":"OnCalendar=daily",
+                          "weekly":"OnCalendar=weekly",
+                          "monthly":"OnCalendar=monthly"}[INTERVALS[interval_idx]]
+            with open(timer_path,"w") as f:
+                f.write(f"""[Unit]
+Description=Auri Scheduled Timer
+
+[Timer]
+{oncalendar}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+""")
+            # enable/disable timer
+            subprocess.call("systemctl daemon-reload", shell=True)
+            if enabled:
+                subprocess.call("systemctl enable --now auri.timer", shell=True)
             else:
-                safe_addstr(stdscr,"  "+label+"\n")
-        k=stdscr.getch()
-        if k in (curses.KEY_UP,ord("k")) and cur>0: cur-=1
-        elif k in (curses.KEY_DOWN,ord("j")) and cur<len(options)-1: cur+=1
-        elif k in (10,13):
-            if options[cur][1] is None: break
-            options[cur][1](stdscr)
+                subprocess.call("systemctl disable --now auri.timer", shell=True)
+            safe_addstr(stdscr,"\n✅ Scheduler saved!\n")
+            stdscr.getch()
+            break
+
+# -----------------------------
+# MENU PRINCIPAL
+# -----------------------------
+MAIN_ACTIONS = ACTIONS + [
+    ("Batch Mode / Scheduler", batch_menu),
+    ("Configure Scheduler / Timer", scheduler_menu),
+    ("Exit", None)
+]
+
+def menu(stdscr):
+    curses.curs_set(0)
+    cur = 0
+    while True:
+        stdscr.clear()
+        safe_addstr(stdscr,"Auri :: Advanced System Tool\n")
+        safe_addstr(stdscr,"="*40 + "\n\n")
+        for i,(label,_) in enumerate(MAIN_ACTIONS):
+            if i==cur: stdscr.addstr("> " + label + "\n", curses.A_REVERSE)
+            else: safe_addstr(stdscr,"  " + label + "\n")
+        key = stdscr.getch()
+        if key in (curses.KEY_UP, ord("k")) and cur>0: cur-=1
+        elif key in (curses.KEY_DOWN, ord("j")) and cur<len(MAIN_ACTIONS)-1: cur+=1
+        elif key in (10,13):
+            if MAIN_ACTIONS[cur][1] is None: break
+            MAIN_ACTIONS[cur][1](stdscr)
 
 # -----------------------------
 # MAIN
 # -----------------------------
 def main():
-    if os.geteuid()!=0: print("Run as root"); sys.exit(1)
-    ensure_batch_config()  # <-- auto-create batch config
-    if "--batch" in sys.argv: batch_mode(None)
-    else: curses.wrapper(menu)
+    if os.geteuid()!=0:
+        print("Run Auri as root.")
+        sys.exit(1)
+    ensure_batch_config()
+    ensure_scheduler_config()
+    if "--batch" in sys.argv:
+        with open(BATCH_CONFIG) as f:
+            cfg=json.load(f)
+        for act_name in cfg.get("actions",[]):
+            for _,fn in ACTIONS:
+                if fn and fn.__name__==act_name: fn(None)
+    else:
+        curses.wrapper(menu)
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    main()
