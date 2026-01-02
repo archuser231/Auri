@@ -38,15 +38,15 @@ auri
 
 After installation, a systemd timer is automatically enabled to run batch actions weekly.
 
-Batch Configuration (/etc/auri/batch.json)
+Batch Configuration (/etc/auri/batch.json) EDIT: There's now a batch menu to config in the TuI menu so you don't need to nano/vi/vim (or anything else to edit a file).
 
 The default batch file is generated automatically at install:
 
-{ "actions": [ "remove_lock", "mirror_optimizer", "update_system", "remove_orphans", "clean_cache" ], "frequency": "weekly" }
+{ "actions": [ "remove_lock", "mirror_optimizer", "update_system", "remove_orphans", "clean_cache" ], "frequency": "weekly" } EDIT: i'm not sure if still the same config.
 
 You can edit this file to customize which actions run automatically.
 
-Usage
+Usage You cna use man auri to have a manual about how to use it.
 
 Launch from terminal:
 
