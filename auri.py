@@ -76,6 +76,15 @@ def ensure_scheduler_config():
             json.dump({"actions":[],"enabled":False,"interval":"weekly"}, f, indent=4)
 
 # -----------------------------
+# SNAPSHOT MANAGER
+# -----------------------------
+def snapshot(stdscr,label="snapshot"):
+    header(stdscr,f"Snapshot: {label}")
+    run(f"snapper create -d 'auri {label}'", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
+
+# -----------------------------
 # ACTIONS
 # -----------------------------
 def remove_lock(stdscr):
@@ -170,6 +179,56 @@ usermod -aG libvirt $(logname)
     stdscr.getch()
 
 # -----------------------------
+# KEYRING & REPOS
+# -----------------------------
+OFFICIAL_REPOS = {"core","extra","community","multilib","cachyos"}
+OPTIONAL_REPOS = {"chaotic","blackarch","archstrike"}
+KNOWN_KEYRINGS = {
+    "arch":"archlinux-keyring",
+    "cachyos":"cachyos-keyring",
+    "chaotic":"chaotic-keyring",
+    "blackarch":"blackarch-keyring",
+    "archstrike":"archstrike-keyring"
+}
+
+def manage_repos_and_keyrings(stdscr):
+    header(stdscr,"Repos & Keyrings")
+    active = []
+    with open("/etc/pacman.conf","r") as f:
+        for line in f:
+            line=line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                active.append(line[1:-1].lower())
+
+    to_update = []
+    for r in active:
+        kr = KNOWN_KEYRINGS.get(r)
+        if kr:
+            if stdscr: safe_addstr(stdscr,f"Update keyring for {r}? (y/n): ")
+            ans = "y" if stdscr is None else stdscr.getstr(0,3).decode().strip().lower()
+            if ans=="y": to_update.append(kr)
+
+    if to_update:
+        run("pacman -Sy --noconfirm " + " ".join(to_update), stdscr)
+        run("pacman-key --init", stdscr)
+        for kr in to_update: run(f"pacman-key --populate {kr.split('-keyring')[0]}", stdscr)
+        run("pacman-key --refresh-keys", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
+
+# -----------------------------
+# WINE INSTALL
+# -----------------------------
+def wine_install(stdscr,mode):
+    header(stdscr,f"Wine Install: {mode}")
+    if mode=="x86": run("pacman -S --noconfirm wine wine-mono wine-gecko lib32-wine", stdscr)
+    elif mode=="x64": run("pacman -S --noconfirm wine wine-mono wine-gecko", stdscr)
+    elif mode=="both": run("pacman -S --noconfirm wine wine-mono wine-gecko lib32-wine", stdscr)
+    elif mode=="test": run("pacman -S --noconfirm winehq-stable wine-stable:amd64 wine-stable-amd64:amd64 wine-stable-i386:i386", stdscr)
+    safe_addstr(stdscr,"\nPress any key...")
+    stdscr.getch()
+
+# -----------------------------
 # ACTIONS LIST
 # -----------------------------
 ACTIONS = [
@@ -177,6 +236,8 @@ ACTIONS = [
     ("DNS Reset", dns_reset),
     ("Optimize Mirrors", mirror_optimizer),
     ("Update System", update_system),
+    ("Snapshot pre-update", lambda s: snapshot(s,"pre-update")),
+    ("Snapshot post-update", lambda s: snapshot(s,"post-update")),
     ("Full System Fix", full_fix),
     ("Reinstall ALL Packages", reinstall_all),
     ("Remove Orphan Packages", remove_orphans),
@@ -184,7 +245,12 @@ ACTIONS = [
     ("Sound Fix", sound_fix),
     ("Reset Snapper", reset_snapper),
     ("Kernel Manager", kernel_manager),
-    ("Install Virtualization Stack", virtualization)
+    ("Install Virtualization Stack", virtualization),
+    ("Repos & Keyrings", manage_repos_and_keyrings),
+    ("Wine x86", lambda s: wine_install(s,"x86")),
+    ("Wine x64", lambda s: wine_install(s,"x64")),
+    ("Wine both", lambda s: wine_install(s,"both")),
+    ("Wine test", lambda s: wine_install(s,"test"))
 ]
 
 # -----------------------------
@@ -262,10 +328,9 @@ def scheduler_menu(stdscr):
             os.makedirs(os.path.dirname(SCHEDULER_CONFIG), exist_ok=True)
             with open(SCHEDULER_CONFIG,"w") as f:
                 json.dump({"actions":actions_to_run,"enabled":enabled,"interval":INTERVALS[interval_idx]},f,indent=4)
-            # create systemd timer
+            # create systemd service/timer
             timer_path = "/etc/systemd/system/auri.timer"
             service_path = "/etc/systemd/system/auri.service"
-            # create service
             with open(service_path,"w") as f:
                 f.write(f"""[Unit]
 Description=Auri Scheduled Service
@@ -275,7 +340,6 @@ After=network.target
 Type=oneshot
 ExecStart=/usr/bin/auri --batch
 """)
-            # create timer
             oncalendar = {"on-boot":"OnBootSec=1min",
                           "hourly":"OnCalendar=hourly",
                           "daily":"OnCalendar=daily",
@@ -292,7 +356,6 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 """)
-            # enable/disable timer
             subprocess.call("systemctl daemon-reload", shell=True)
             if enabled:
                 subprocess.call("systemctl enable --now auri.timer", shell=True)
@@ -303,7 +366,7 @@ WantedBy=timers.target
             break
 
 # -----------------------------
-# MENU PRINCIPAL
+# MAIN MENU
 # -----------------------------
 MAIN_ACTIONS = ACTIONS + [
     ("Batch Mode / Scheduler", batch_menu),
