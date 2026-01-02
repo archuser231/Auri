@@ -1,4 +1,4 @@
-# FROM: Thinkpad-Ultra7
+# Maintainer: Thinkpad-Ultra7 / archuser231
 pkgname=auri
 pkgver=1.0
 pkgrel=1
@@ -15,68 +15,70 @@ source=('auri.py')
 sha256sums=('SKIP')
 
 package() {
+    # Installer le script Python
     install -Dm755 "$srcdir/auri.py" "$pkgdir/usr/bin/auri"
-    
+
+    # Créer les configs JSON par défaut
+    mkdir -p "$pkgdir/etc/auri"
+    echo '{"actions":["remove_lock","dns_reset","mirror_optimizer","update_system"]}' > "$pkgdir/etc/auri/batch.json"
+    echo '{"actions":[],"enabled":false,"interval":"weekly"}' > "$pkgdir/etc/auri/scheduler.json"
+
     # Desktop entry
-    install -Dm644 /dev/null "$pkgdir/usr/share/applications/auri.desktop"
-    cat > "$pkgdir/usr/share/applications/auri.desktop" << EOF
-[Desktop Entry]
-Name=Auri
-Comment=Advanced System Tool
-Exec=sudo /usr/bin/auri
-Terminal=true
-Type=Application
-Categories=Utility;System;
-Icon=utilities-system
-EOF
+    mkdir -p "$pkgdir/usr/share/applications"
+    echo '[Desktop Entry]' > "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Name=Auri' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Comment=Advanced System Tool' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Exec=sudo /usr/bin/auri' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Terminal=true' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Type=Application' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Categories=Utility;System;' >> "$pkgdir/usr/share/applications/auri.desktop"
+    echo 'Icon=utilities-system' >> "$pkgdir/usr/share/applications/auri.desktop"
 
-    # Systemd service & timer
-    install -Dm644 /dev/null "$pkgdir/usr/lib/systemd/system/auri.service"
-    cat > "$pkgdir/usr/lib/systemd/system/auri.service" << 'EOF'
-[Unit]
-Description=Auri Scheduler Service
-After=network.target
+    # systemd service
+    mkdir -p "$pkgdir/usr/lib/systemd/system"
+    echo '[Unit]' > "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo 'Description=Auri Scheduled Service' >> "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo 'After=network.target' >> "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo '' >> "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo '[Service]' >> "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo 'Type=oneshot' >> "$pkgdir/usr/lib/systemd/system/auri.service"
+    echo 'ExecStart=/usr/bin/auri --batch' >> "$pkgdir/usr/lib/systemd/system/auri.service"
 
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/auri --batch
-EOF
+    # systemd timer
+    echo '[Unit]' > "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo 'Description=Auri Scheduled Timer' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo '' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo '[Timer]' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo 'OnCalendar=weekly' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo 'Persistent=true' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo '' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo '[Install]' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
+    echo 'WantedBy=timers.target' >> "$pkgdir/usr/lib/systemd/system/auri.timer"
 
-    install -Dm644 /dev/null "$pkgdir/usr/lib/systemd/system/auri.timer"
-    cat > "$pkgdir/usr/lib/systemd/system/auri.timer" << 'EOF'
-[Unit]
-Description=Auri Weekly Maintenance
-
-[Timer]
-OnCalendar=weekly
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    # Safe batch config
-    install -Dm644 /dev/null "$pkgdir/etc/auri/batch.json"
-    cat > "$pkgdir/etc/auri/batch.json" << 'EOF'
-{
-    "actions": [
-        "remove_lock",
-        "mirror_optimizer", 
-        "update_system",
-        "remove_orphans",
-        "clean_cache"
-    ],
-    "frequency": "weekly"
-}
-EOF
+    # Manpage (English)
+    mkdir -p "$pkgdir/usr/share/man/man1"
+    echo '.TH AURI 1 "2026-01-02" "1.0" "Auri Manual"' > "$pkgdir/usr/share/man/man1/auri.1"
+    echo '.SH NAME' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'Auri \- Advanced system management tool for CachyOS/Arch Linux' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '.SH SYNOPSIS' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'auri [--batch] [--help]' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '.SH DESCRIPTION' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'Auri is a terminal-based system tool for CachyOS/Arch Linux.' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'It can update your system, manage repos, optimize mirrors, reset DNS, manage snapshots,' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'install Wine, handle sound fixes, and more.' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '.SH OPTIONS' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '--batch      Run the batch actions automatically' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '--help       Show this manual page' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo '.SH AUTHOR' >> "$pkgdir/usr/share/man/man1/auri.1"
+    echo 'Thinkpad-Ultra7 <thinkpad@example.com>' >> "$pkgdir/usr/share/man/man1/auri.1"
 }
 
-post-install() {
+post_install() {
     systemctl daemon-reload
     systemctl enable --now auri.timer 2>/dev/null || true
+    echo "Auri installed! Timer enabled. Use 'man auri' for help."
 }
 
-post-remove() {
+post_remove() {
     systemctl disable --now auri.timer 2>/dev/null || true
 }
-
