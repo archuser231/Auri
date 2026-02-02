@@ -53,7 +53,7 @@ def run(cmd, stdscr=None):
 
 def header(stdscr, title):
     stdscr.clear()
-    safe_addstr(stdscr, f"Auri :: {title}\n")
+    safe_addstr(stdscr, f"Auri the Garuda rani for cachy-os by thinkpad_ultra7 @archuser231 :: {title}\n")
     safe_addstr(stdscr, "="*40 + "\n\n")
 
 def confirm(stdscr, msg):
@@ -219,15 +219,32 @@ def manage_repos_and_keyrings(stdscr):
 # -----------------------------
 # WINE INSTALL
 # -----------------------------
-def wine_install(stdscr,mode):
-    header(stdscr,f"Wine Install: {mode}")
-    if mode=="x86": run("pacman -S --noconfirm wine wine-mono wine-gecko lib32-wine", stdscr)
-    elif mode=="x64": run("pacman -S --noconfirm wine wine-mono wine-gecko", stdscr)
-    elif mode=="both": run("pacman -S --noconfirm wine wine-mono wine-gecko lib32-wine", stdscr)
-    elif mode=="test": run("pacman -S --noconfirm winehq-stable wine-stable:amd64 wine-stable-amd64:amd64 wine-stable-i386:i386", stdscr)
-    safe_addstr(stdscr,"\nPress any key...")
-    stdscr.getch()
+def wine_install(stdscr, mode):
+    header(stdscr, f"Wine Install: {mode}")
+    
+    cmd = ""
+    if mode == "x86": cmd = "pacman -S --noconfirm --needed wine lib32-wine winetricks zenity"
+    elif mode == "x64": cmd = "pacman -S --noconfirm --needed wine winetricks zenity"
+    elif mode == "work": cmd = "pacman -S --noconfirm --needed wine-cachyos lib32-wine-cachyos winetricks zenity"
+    elif mode == "both": cmd = "pacman -S --noconfirm --needed wine lib32-wine winetricks zenity"
+    elif mode == "test": cmd = "pacman -S --noconfirm --needed wine lib32-wine winetricks zenity"
 
+    ret = run(cmd, stdscr)
+    
+    if ret != 0:
+        safe_addstr(stdscr, "\n" + "!"*50 + "\n")
+        safe_addstr(stdscr, "❌ INSTALLATION FAILED!\n")
+        safe_addstr(stdscr, "It might be because [multilib] is not enabled.\n\n")
+        safe_addstr(stdscr, "TO CHECK/ENABLE MULTILIB:\n")
+        safe_addstr(stdscr, "1. Run: sudo nano /etc/pacman.conf\n")
+        safe_addstr(stdscr, "2. Find the [multilib] section.\n")
+        safe_addstr(stdscr, "3. Uncomment (remove #) [multilib] and the Include line.\n")
+        safe_addstr(stdscr, "4. Save & Exit: Press Ctrl+X, then Y, then Enter.\n")
+        safe_addstr(stdscr, "5. Run: sudo pacman -Syu\n")
+        safe_addstr(stdscr, "!"*50 + "\n")
+
+    safe_addstr(stdscr, "\nPress any key to return...")
+    stdscr.getch()
 # -----------------------------
 # ACTIONS LIST
 # -----------------------------
@@ -249,6 +266,7 @@ ACTIONS = [
     ("Repos & Keyrings", manage_repos_and_keyrings),
     ("Wine x86", lambda s: wine_install(s,"x86")),
     ("Wine x64", lambda s: wine_install(s,"x64")),
+    ("Wine WORK", lambda s: wine_install(s,"work")),
     ("Wine both", lambda s: wine_install(s,"both")),
     ("Wine test", lambda s: wine_install(s,"test"))
 ]
